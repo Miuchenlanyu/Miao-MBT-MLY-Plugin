@@ -477,19 +477,24 @@ async function patchMiaoCostume() {
     const orig = ProfileAvatar.getCostumeSplash.bind(ProfileAvatar)
 
     ProfileAvatar.getCostumeSplash = function (profile, game = 'gs') {
-      if (!loadCfg().intercept) return orig(profile, game)
+      const cfg = loadCfg()
+      if (!cfg.intercept) return orig(profile, game)
       const name = profile?.name
       if (name) {
         const gdir = game === 'sr' ? 'starrail' : game === 'zzz' ? 'zzz' : 'genshin'
-        // 1) MBT 仓库 R 级优先（对所有人可见，无分级风险）
-        const repo = path.join(MLY_MBT, gdir, 'R', 'normal-character', name)
-        const rImgs = listImages(repo).filter(f => gradeOf(f) === 'r')
-        if (rImgs.length) return pathToFileURL(path.join(repo, lodash.sample(rImgs))).href
+        // 1) MBT 仓库：按 R/R17/R18 开关 + 权限，读对应分级目录（与 #MLY 命令一致）
+        const ctx = reqStore.getStore() || {}
+        const okR17 = !!ctx.allowR17
+        const okR18 = !!ctx.allowR18
+        const repoImgs = []
+        for (const [lvl, on] of [['R', !!cfg.r], ['R17', okR17], ['R18', okR18]]) {
+          if (!on) continue
+          const dir = path.join(MLY_MBT, gdir, lvl, 'normal-character', name)
+          for (const f of listImages(dir)) repoImgs.push(path.join(dir, f))
+        }
+        if (repoImgs.length) return pathToFileURL(lodash.sample(repoImgs)).href
         // 2) 回落 miao 候选池，按权限过滤 R17/R18
         try {
-          const ctx = reqStore.getStore() || {}
-          const okR18 = !!ctx.allowR18
-          const okR17 = !!ctx.allowR17
           const pool = CharImg.getProfileImgPool(name, false)
           if (Array.isArray(pool) && pool.length) {
             const allowed = pool.filter(p => {
@@ -795,8 +800,8 @@ class MlyPanel extends plugin {
     const miaoDir = path.join(base, char)
     const repo = path.join(MLY_MBT, game, 'R', 'normal-character', char)
     const files = []
-    // 1) R 级图：优先使用 MBT 仓库
-    for (const f of listImages(repo)) files.push(path.join(repo, f))
+    // 1) R 级图：优先使用 MBT 仓库（受 cfg.r 开关控制，关掉则不发 R 级图）
+    if (cfg.r) for (const f of listImages(repo)) files.push(path.join(repo, f))
     // 2) R17/R18：MBT 仓库的 R17 / R18 目录（按开关+权限）
     for (const lvl of ['R17', 'R18']) {
       if (lvl === 'R17' && !cfg.r17) continue
