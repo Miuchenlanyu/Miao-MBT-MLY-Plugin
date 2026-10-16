@@ -488,15 +488,15 @@ async function patchMiaoCostume() {
         // 2) 回落 miao 候选池，按权限过滤 R17/R18
         try {
           const ctx = reqStore.getStore() || {}
-          const allowR18 = !!ctx.allowR18
-          const allowR17 = !!ctx.allowR17
+          const okR18 = !!ctx.allowR18
+          const okR17 = !!ctx.allowR17
           const pool = CharImg.getProfileImgPool(name, false)
           if (Array.isArray(pool) && pool.length) {
             const allowed = pool.filter(p => {
               const g = gradeOf(p)
               if (g === 'r' || g === '') return true
-              if (g === 'r17') return allowR17
-              if (g === 'r18') return allowR18
+              if (g === 'r17') return okR17
+              if (g === 'r18') return okR18
               return true
             })
             if (allowed.length) return lodash.sample(allowed)
@@ -520,9 +520,10 @@ async function patchMiaoCostume() {
       const origRender = ProfileDetail.render.bind(ProfileDetail)
       ProfileDetail.render = async function (e, char, mode, params) {
         const cfg = loadCfg()
-        const allowR18 = cfg.r18 === true && allowR18(cfg, e)
-        const allowR17 = cfg.r17 === true && (cfg.r18_view || '无人') !== '无人'
-        return reqStore.run({ allowR18, allowR17 }, () => origRender(e, char, mode, params))
+        // 注意：不要用 allowR18 / allowR17 作变量名，会遮蔽同名的模块级函数导致 TDZ 报错
+        const canR18 = cfg.r18 === true && allowR18(cfg, e)
+        const canR17 = cfg.r17 === true && (cfg.r18_view || '无人') !== '无人'
+        return reqStore.run({ allowR18: canR18, allowR17: canR17 }, () => origRender(e, char, mode, params))
       }
       ProfileDetail.__mlyRenderPatched = true
     }
