@@ -1,0 +1,21 @@
+# 本地运行产生的数据与配置（含个人设置，不入库）
+data/
+mly-config.json
+
+# 图库图片：只保留 R 级示例，R17/R18 一律不入库（体积大且含敏感内容）
+resources/MLY-MBT/**/R17/
+resources/MLY-MBT/**/R18/
+
+# 依赖 / 构建产物
+node_modules/
+dist/
+build/
+
+# 编辑器与系统
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# 日志
+*.log
