@@ -23,3 +23,5 @@ Thumbs.db
 
 #自添加
 地址.txt
+# 本地同步脚本，不入库
+同步到GitHub.bat
