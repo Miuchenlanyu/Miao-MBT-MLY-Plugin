@@ -111,6 +111,7 @@ python server.py --host 0.0.0.0 --port 11002
 | `r` / `r17` / `r18` | 三个分级开关 |
 | `r18_view` | R18 可见人群：无人 / 主人 / 所有人 |
 | `intercept` | 是否接管 miao 面板立绘 |
+| `groups` | 按群覆盖：`{ "<群号>": { r, r17, r18, r18_view, intercept, name? } }`，私聊始终用全局 |
 | `syncHost` / `syncPort` | Gamewiki 同步地址 |
 
 ---

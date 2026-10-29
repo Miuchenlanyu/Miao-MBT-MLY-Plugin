@@ -66,34 +66,38 @@ function gradeOf(name) {
   if (n.includes('r17')) return 'r17'
   return 'r'
 }
-/** 取当前会话对应的群配置（私聊返回 null）；groups 结构：{ "<群号>": { name?, r18:'inherit'|'allow'|'deny', r17:'inherit'|'allow'|'deny' } } */
+/** 取当前会话对应的群配置（私聊返回 null）；groups 结构：{ "<群号>": { name?, r, r17, r18, r18_view, intercept } } */
 function groupEntry(cfg, e) {
   const gid = e && (e.group_id || e.groupId)
   if (!gid) return null
   const gs = cfg && cfg.groups
   return (gs && gs[String(gid)]) || null
 }
-/** R18 是否可见（完整判定）：群配置优先；群未配置时按全局 r18 开关 + r18_view */
-function allowR18(cfg, e) {
+/** 该会话实际生效的配置：指定群优先覆盖全局（未配置的字段回落全局） */
+function effectiveCfg(cfg, e) {
   const g = groupEntry(cfg, e)
-  if (g) {
-    if (g.r18 === 'allow') return true
-    if (g.r18 === 'deny') return false
-  }
-  if (!cfg.r18) return false
-  if (cfg.r18_view === '无人') return false
-  if (cfg.r18_view === '主人') return !!e.isMaster
+  if (!g) return cfg
+  return Object.assign({}, cfg, {
+    r: typeof g.r === 'boolean' ? g.r : cfg.r,
+    r17: typeof g.r17 === 'boolean' ? g.r17 : cfg.r17,
+    r18: typeof g.r18 === 'boolean' ? g.r18 : cfg.r18,
+    r18_view: ['无人', '主人', '所有人'].includes(g.r18_view) ? g.r18_view : cfg.r18_view,
+    intercept: typeof g.intercept === 'boolean' ? g.intercept : cfg.intercept,
+  })
+}
+/** R18 是否可见：按该会话生效配置判定 */
+function allowR18(cfg, e) {
+  const c = effectiveCfg(cfg, e)
+  if (!c.r18) return false
+  if (c.r18_view === '无人') return false
+  if (c.r18_view === '主人') return !!e.isMaster
   return true
 }
-/** R17 是否可见（完整判定）：群配置优先；群未配置时按全局 r17 开关 + r18_view */
+/** R17 是否可见：按该会话生效配置判定 */
 function allowR17(cfg, e) {
-  const g = groupEntry(cfg, e)
-  if (g) {
-    if (g.r17 === 'allow') return true
-    if (g.r17 === 'deny') return false
-  }
-  if (!cfg.r17) return false
-  return (cfg.r18_view || '无人') !== '无人'
+  const c = effectiveCfg(cfg, e)
+  if (!c.r17) return false
+  return (c.r18_view || '无人') !== '无人'
 }
 function resolveGame(t) {
   if (!t) return ''
@@ -262,6 +266,15 @@ button{cursor:pointer;background:linear-gradient(135deg,#ff9d54,#ff5d8f);border:
 .gtable th{color:#9aa3c4;font-weight:600}
 .gtable .gdel{background:#3a2430;color:#ff9aa8;border:1px solid #7a3a4a;padding:4px 10px;font-weight:600}
 .gtable .gdel:hover{background:#5a2f3c}
+.gtog{display:inline-flex;align-items:center;gap:5px;padding:5px 10px;border-radius:8px;background:#222742;border:1px solid #3a3f5c;font-size:13px;cursor:pointer}
+.gtog input{cursor:pointer}
+.row label.gtog{width:auto;color:#e9ecf5}
+.cnt{color:#9aa3c4;font-size:13px}
+.hint{color:#8b93b0;font-size:12px;line-height:1.7;background:#131828;border-left:3px solid #4a5db0;padding:8px 10px;border-radius:6px;margin:0 0 10px}
+button.mini{font-size:12px;padding:4px 10px;font-weight:600;background:#2a3050;border:1px solid #3a3f5c;color:#c3c9e0}
+button.mini:hover{background:#333a5c;color:#fff}
+.glabel{color:#9aa3c4;font-size:13px;margin-left:6px}
+.glisttitle{font-size:13px;color:#9aa3c4;font-weight:600;margin:16px 0 2px}
 </style></head><body>
 <h1>MLY 面板图 · Web 管理</h1>
 <div class="sub">端口 ${WEB_PORT} · 配置实时写入 data/mly-config.json</div>
@@ -271,7 +284,7 @@ button{cursor:pointer;background:linear-gradient(135deg,#ff9d54,#ff5d8f);border:
 </div>
 <div id="tabAdm" style="display:none">
 <div class="panel">
-  <div class="grp">分级开关与权限</div>
+  <div class="grp">全局 · 分级开关与权限</div>
   <div class="row"><label>R18 可见权限</label>
     <select id="r18_view">
       <option value="无人"${c.r18_view === '无人' ? ' selected' : ''}>无人</option>
@@ -282,20 +295,35 @@ button{cursor:pointer;background:linear-gradient(135deg,#ff9d54,#ff5d8f);border:
   <div class="row"><label>R17 开关</label><input type="checkbox" id="r17" ${c.r17 ? 'checked' : ''}/></div>
   <div class="row"><label>R18 开关</label><input type="checkbox" id="r18" ${c.r18 ? 'checked' : ''}/></div>
   <div class="row"><label>拦截原图（面板立绘）</label><input type="checkbox" id="intercept" ${c.intercept ? 'checked' : ''}/></div>
-  <div class="grp" style="margin-top:18px">指定群权限 · 按群覆盖上面的全局设置</div>
-  <div class="row">
-    <select id="gidSel" style="min-width:300px"><option value="">加载群列表…</option></select>
-    <button id="gRefresh">刷新群列表</button>
-  </div>
-  <div class="row">
-    <input type="text" id="gidAdd" placeholder="或手动输入群号" style="width:160px"/>
-    <input type="text" id="gnameAdd" placeholder="备注（可选）" style="width:140px"/>
-    <button id="gAdd">＋ 添加</button>
-  </div>
-  <div id="groupList"></div>
-  <div class="row"><button id="save">保存设置</button><span class="tip" id="tip"></span></div>
+  <div class="row"><button id="save">保存全局设置</button><span class="tip" id="tip"></span></div>
   <div class="row"><span class="cnt">当前：R=${c.r ? '开' : '关'} · R17=${c.r17 ? '开' : '关'} · R18=${c.r18 ? '开' : '关'} · R18可见=${c.r18_view} · 接管立绘=${c.intercept ? '开' : '关'}</span></div>
 </div>
+
+<div class="panel">
+  <div class="grp">指定群权限 · 按群覆盖全局</div>
+  <div class="hint">规则：列表中的群使用各自的独立配置（R / R17 / R18 / R18可见 / 拦截原图（面板立绘） 五项都可单独覆盖）；不在列表的群使用上面的全局设置；私聊始终使用全局。</div>
+  <div class="row">
+    <label>选择群</label>
+    <select id="gidSel" style="min-width:240px"><option value="">加载中…</option></select>
+    <button id="gRefresh" class="mini">刷新群列表</button>
+  </div>
+  <div class="row">
+    <label>该群配置</label>
+    <label class="gtog">R<input type="checkbox" id="ng_r" ${c.r ? 'checked' : ''}/></label>
+    <label class="gtog">R17<input type="checkbox" id="ng_r17" ${c.r17 ? 'checked' : ''}/></label>
+    <label class="gtog">R18<input type="checkbox" id="ng_r18" ${c.r18 ? 'checked' : ''}/></label>
+    <span class="glabel">R18可见</span>
+    <select id="ng_view" title="R18 可见权限">
+      <option value="无人"${c.r18_view === '无人' ? ' selected' : ''}>无人</option>
+      <option value="主人"${c.r18_view === '主人' ? ' selected' : ''}>主人</option>
+      <option value="所有人"${c.r18_view === '所有人' ? ' selected' : ''}>所有人</option>
+    </select>
+    <label class="gtog">拦截原图（面板立绘）<input type="checkbox" id="ng_intercept" ${c.intercept ? 'checked' : ''}/></label>
+    <button id="gAdd">添加到单独配置</button>
+    <span class="tip" id="gTip"></span>
+  </div>
+  <div class="glisttitle">已单独配置的群</div>
+  <div id="groupList"></div>
 </div>
 <div class="panel">
   <div class="grp">从 Gamewiki (11002) 同步仓库图片</div>
@@ -336,23 +364,50 @@ const REPO=${JSON.stringify(repoJson)};
 const tip=document.getElementById('tip');
 const GROUPS=${JSON.stringify(c.groups || {})};
 const gList=document.getElementById('groupList');
-const GOPT={inherit:'继承全局',allow:'允许',deny:'禁止'};
-function gsel(v){return ['inherit','allow','deny'].map(k=>'<option value="'+k+'"'+((v||'inherit')===k?' selected':'')+'>'+GOPT[k]+'</option>').join('')}
+const GNAMES={};
+function vsel(v){return ['无人','主人','所有人'].map(k=>'<option value="'+k+'"'+((v||'无人')===k?' selected':'')+'>'+k+'</option>').join('')}
+function cb(cls,v){return '<input type="checkbox" class="'+cls+'"'+(v?' checked':'')+'/>'}
 function renderGroups(){
   const ids=Object.keys(GROUPS);
   if(!ids.length){gList.innerHTML='<div class="row"><span class="cnt">暂无指定群 · 所有群使用上面的全局设置</span></div>';return;}
-  gList.innerHTML='<table class="gtable"><thead><tr><th>群号</th><th>备注</th><th>R18</th><th>R17</th><th></th></tr></thead><tbody>'+
+  gList.innerHTML='<table class="gtable"><thead><tr><th>群</th><th>R</th><th>R17</th><th>R18</th><th>R18可见</th><th>拦截原图（面板立绘）</th><th></th></tr></thead><tbody>'+
     ids.map(id=>{const g=GROUPS[id]||{};return '<tr data-id="'+esc(id)+'">'+
-      '<td>'+esc(id)+'</td>'+
-      '<td><input type="text" class="gname" style="width:130px" value="'+esc(g.name||'')+'" placeholder="备注"/></td>'+
-      '<td><select class="g_r18">'+gsel(g.r18)+'</select></td>'+
-      '<td><select class="g_r17">'+gsel(g.r17)+'</select></td>'+
+      '<td>'+esc(g.name?(''+g.name+'（'+id+'）'):id)+'</td>'+
+      '<td>'+cb('g_r',!!g.r)+'</td>'+
+      '<td>'+cb('g_r17',!!g.r17)+'</td>'+
+      '<td>'+cb('g_r18',!!g.r18)+'</td>'+
+      '<td><select class="g_view">'+vsel(g.r18_view)+'</select></td>'+
+      '<td>'+cb('g_intercept',!!g.intercept)+'</td>'+
       '<td><button class="gdel" data-id="'+esc(id)+'">删除</button></td></tr>';}).join('')+
     '</tbody></table>';
-  gList.querySelectorAll('.gdel').forEach(b=>b.onclick=()=>{delete GROUPS[b.dataset.id];renderGroups();});
+  gList.querySelectorAll('.gdel').forEach(b=>b.onclick=async()=>{delete GROUPS[b.dataset.id];renderGroups();await loadGroups();await saveAll();});
+  gList.onchange=async()=>{Object.assign(GROUPS,collectGroups());await saveAll();};
 }
-renderGroups();
-const GNAMES={};
+function collectGroups(){
+  const out={};
+  gList.querySelectorAll('tr[data-id]').forEach(tr=>{
+    const id=tr.dataset.id;
+    const prev=GROUPS[id]||{};
+    const one={r:tr.querySelector('.g_r').checked,r17:tr.querySelector('.g_r17').checked,r18:tr.querySelector('.g_r18').checked,r18_view:tr.querySelector('.g_view').value,intercept:tr.querySelector('.g_intercept').checked};
+    if(prev.name)one.name=prev.name;
+    out[id]=one;
+  });
+  return out;
+}
+async function saveAll(){
+  const cfg={r18_view:document.getElementById('r18_view').value,
+    r:document.getElementById('r').checked,
+    r17:document.getElementById('r17').checked,
+    r18:document.getElementById('r18').checked,
+    intercept:document.getElementById('intercept').checked,
+    groups:collectGroups()};
+  try{
+    const r=await fetch('/set',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(cfg)});
+    const j=await r.json();
+    tip.textContent=j.ok?'已保存 ✓':'保存失败：'+(j.msg||'');
+    return !!j.ok;
+  }catch(e){tip.textContent='请求失败：'+e;return false;}
+}
 async function loadGroups(){
   const sel=document.getElementById('gidSel');
   sel.innerHTML='<option value="">加载群列表…</option>';
@@ -363,45 +418,31 @@ async function loadGroups(){
     if(!list.length){sel.innerHTML='<option value="">（无可添加的群 / 均已在列表中）</option>';return;}
     list.forEach(g=>{GNAMES[g.id]=g.name||''});
     sel.innerHTML='<option value="">— 选择检测到的群 —</option>'+list.map(g=>'<option value="'+esc(g.id)+'">'+esc((g.name||('群'+g.id))+'（'+g.id+'）')+'</option>').join('');
-  }catch(e){sel.innerHTML='<option value="">加载失败，请手动输入群号</option>';}
+  }catch(e){sel.innerHTML='<option value="">加载失败</option>';}
 }
-document.getElementById('gRefresh').onclick=loadGroups;
+renderGroups();
 loadGroups();
-document.getElementById('gAdd').onclick=()=>{
+const gTip=document.getElementById('gTip');
+document.getElementById('gRefresh').onclick=loadGroups;
+// 选中群时，把「该群配置」的默认值同步成当前全局设置
+document.getElementById('gidSel').onchange=()=>{
+  gTip.textContent='';
+  ;['r','r17','r18','intercept'].forEach(k=>{document.getElementById('ng_'+k).checked=document.getElementById(k).checked});
+  document.getElementById('ng_view').value=document.getElementById('r18_view').value;
+};
+document.getElementById('gAdd').onclick=async()=>{
   const sel=document.getElementById('gidSel');
-  let id=(sel.value||'').trim();
-  const nmInput=(document.getElementById('gnameAdd').value||'').trim();
-  if(!id) id=(document.getElementById('gidAdd').value||'').trim();
-  if(!/^\d{4,20}$/.test(id)){tip.textContent='请选择检测到的群，或手动输入正确群号';return;}
-  const nm=nmInput||GNAMES[id]||'';
-  const prev=GROUPS[id]||{};
-  GROUPS[id]={r18:prev.r18||'inherit',r17:prev.r17||'inherit'};
-  if(nm)GROUPS[id].name=nm;
-  document.getElementById('gidAdd').value='';document.getElementById('gnameAdd').value='';sel.value='';
-  renderGroups(); loadGroups();
-  tip.textContent='已加入列表，请点「保存设置」生效';
+  const id=(sel.value||'').trim();
+  // 注意：本段 JS 位于模板字符串内，不能写 \d（会被转义成 d），分组统一用 [0-9]
+  if(!/^[0-9A-Za-z_-]{2,32}$/.test(id)){gTip.textContent='请先选择要配置的群';return;}
+  GROUPS[id]={r:document.getElementById('ng_r').checked,r17:document.getElementById('ng_r17').checked,r18:document.getElementById('ng_r18').checked,r18_view:document.getElementById('ng_view').value,intercept:document.getElementById('ng_intercept').checked};
+  if(GNAMES[id])GROUPS[id].name=GNAMES[id];
+  renderGroups();
+  await loadGroups();
+  const ok=await saveAll();
+  gTip.textContent=ok?('已添加群 '+id+' ✓'):'保存失败，请看上方提示';
 };
-document.getElementById('save').onclick=async()=>{
-  const groups={};
-  gList.querySelectorAll('tr[data-id]').forEach(tr=>{
-    const id=tr.dataset.id;
-    const g={r18:tr.querySelector('.g_r18').value,r17:tr.querySelector('.g_r17').value};
-    const nm=(tr.querySelector('.gname').value||'').trim();
-    if(nm)g.name=nm;
-    groups[id]=g;
-  });
-  const cfg={r18_view:document.getElementById('r18_view').value,
-    r:document.getElementById('r').checked,
-    r17:document.getElementById('r17').checked,
-    r18:document.getElementById('r18').checked,
-    intercept:document.getElementById('intercept').checked,
-    groups};
-  try{
-    const r=await fetch('/set',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(cfg)});
-    const j=await r.json();
-    tip.textContent=j.ok?'已保存 ✓':'保存失败：'+(j.msg||'');
-  }catch(e){tip.textContent='请求失败：'+e;}
-};
+document.getElementById('save').onclick=saveAll;
 document.querySelectorAll('.wtab').forEach(t=>{
   t.onclick=()=>{
     document.querySelectorAll('.wtab').forEach(x=>x.classList.remove('active'));
@@ -576,16 +617,19 @@ async function patchMiaoCostume() {
 
     ProfileAvatar.getCostumeSplash = function (profile, game = 'gs') {
       const cfg = loadCfg()
-      if (!cfg.intercept) return orig(profile, game)
+      const ctx = reqStore.getStore() || {}
+      // 拦截原图支持按群覆盖：请求上下文里的 intercept 优先，无上下文（后台任务等）回落全局
+      const intercept = ctx.intercept !== undefined ? !!ctx.intercept : !!cfg.intercept
+      if (!intercept) return orig(profile, game)
       const name = profile?.name
       if (name) {
         const gdir = game === 'sr' ? 'starrail' : game === 'zzz' ? 'zzz' : 'genshin'
         // 1) MBT 仓库：按 R/R17/R18 开关 + 权限，读对应分级目录（与 #MLY 命令一致）
-        const ctx = reqStore.getStore() || {}
         const okR17 = !!ctx.allowR17
         const okR18 = !!ctx.allowR18
+        const repoR = ctx.r !== undefined ? !!ctx.r : !!cfg.r
         const repoImgs = []
-        for (const [lvl, on] of [['R', !!cfg.r], ['R17', okR17], ['R18', okR18]]) {
+        for (const [lvl, on] of [['R', repoR], ['R17', okR17], ['R18', okR18]]) {
           if (!on) continue
           const dir = path.join(MLY_MBT, gdir, lvl, 'normal-character', name)
           for (const f of listImages(dir)) repoImgs.push(path.join(dir, f))
@@ -626,7 +670,9 @@ async function patchMiaoCostume() {
         // 注意：不要用 allowR18 / allowR17 作变量名，会遮蔽同名的模块级函数导致 TDZ 报错
         const canR18 = allowR18(cfg, e)
         const canR17 = allowR17(cfg, e)
-        return reqStore.run({ allowR18: canR18, allowR17: canR17 }, () => origRender(e, char, mode, params))
+        const eff = effectiveCfg(cfg, e)
+        return reqStore.run({ allowR18: canR18, allowR17: canR17, r: !!eff.r, intercept: !!eff.intercept },
+          () => origRender(e, char, mode, params))
       }
       ProfileDetail.__mlyRenderPatched = true
     }
@@ -723,11 +769,18 @@ function startServer() {
           for (const [gid, v] of Object.entries(d.groups)) {
             const id = String(gid).trim()
             if (!id || id.length > 32 || !v || typeof v !== 'object') continue
-            const one = {
-              r18: ['inherit', 'allow', 'deny'].includes(v.r18) ? v.r18 : 'inherit',
-              r17: ['inherit', 'allow', 'deny'].includes(v.r17) ? v.r17 : 'inherit',
-            }
+            const one = {}
             if (typeof v.name === 'string' && v.name.trim()) one.name = v.name.trim().slice(0, 40)
+            if (typeof v.r === 'boolean') one.r = v.r
+            if (typeof v.r17 === 'boolean') one.r17 = v.r17
+            if (typeof v.r18 === 'boolean') one.r18 = v.r18
+            if (['无人', '主人', '所有人'].includes(v.r18_view)) one.r18_view = v.r18_view
+            if (typeof v.intercept === 'boolean') one.intercept = v.intercept
+            // 兼容旧格式（allow/deny）
+            if (v.r18 === 'allow') one.r18 = true
+            if (v.r18 === 'deny') one.r18 = false
+            if (v.r17 === 'allow') one.r17 = true
+            if (v.r17 === 'deny') one.r17 = false
             out[id] = one
           }
           c.groups = out
@@ -938,10 +991,11 @@ class MlyPanel extends plugin {
     const miaoDir = path.join(base, char)
     const repo = path.join(MLY_MBT, game, 'R', 'normal-character', char)
     const files = []
+    const ec = effectiveCfg(cfg, e)
     const okR17 = allowR17(cfg, e)
     const okR18 = allowR18(cfg, e)
-    // 1) R 级图：优先使用 MBT 仓库（受 cfg.r 开关控制，关掉则不发 R 级图）
-    if (cfg.r) for (const f of listImages(repo)) files.push(path.join(repo, f))
+    // 1) R 级图：优先使用 MBT 仓库（受 R 开关控制，关掉则不发 R 级图）
+    if (ec.r) for (const f of listImages(repo)) files.push(path.join(repo, f))
     // 2) R17/R18：MBT 仓库的 R17 / R18 目录（按开关 + 群权限）
     for (const lvl of ['R17', 'R18']) {
       if (lvl === 'R17' && !okR17) continue
