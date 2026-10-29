@@ -47,8 +47,10 @@ const IMG_EXT = ['.webp', '.png', '.jpg', '.jpeg', '.gif']
 function loadCfg() {
   let c = {}
   try { c = JSON.parse(fs.readFileSync(CFG_FILE, 'utf8')) } catch {}
-  return lodash.defaults(c, { r18_view: '主人', r: true, r17: false, r18: false, intercept: true,
+  c = lodash.defaults(c, { r18_view: '主人', r: true, r17: false, r18: false, intercept: true,
     syncHost: '127.0.0.1', syncPort: 11002 })
+  if (!c.groups || typeof c.groups !== 'object' || Array.isArray(c.groups)) c.groups = {}
+  return c
 }
 function saveCfg(c) {
   fs.mkdirSync(DATA_DIR, { recursive: true })
@@ -64,10 +66,34 @@ function gradeOf(name) {
   if (n.includes('r17')) return 'r17'
   return 'r'
 }
+/** 取当前会话对应的群配置（私聊返回 null）；groups 结构：{ "<群号>": { name?, r18:'inherit'|'allow'|'deny', r17:'inherit'|'allow'|'deny' } } */
+function groupEntry(cfg, e) {
+  const gid = e && (e.group_id || e.groupId)
+  if (!gid) return null
+  const gs = cfg && cfg.groups
+  return (gs && gs[String(gid)]) || null
+}
+/** R18 是否可见（完整判定）：群配置优先；群未配置时按全局 r18 开关 + r18_view */
 function allowR18(cfg, e) {
+  const g = groupEntry(cfg, e)
+  if (g) {
+    if (g.r18 === 'allow') return true
+    if (g.r18 === 'deny') return false
+  }
+  if (!cfg.r18) return false
   if (cfg.r18_view === '无人') return false
   if (cfg.r18_view === '主人') return !!e.isMaster
   return true
+}
+/** R17 是否可见（完整判定）：群配置优先；群未配置时按全局 r17 开关 + r18_view */
+function allowR17(cfg, e) {
+  const g = groupEntry(cfg, e)
+  if (g) {
+    if (g.r17 === 'allow') return true
+    if (g.r17 === 'deny') return false
+  }
+  if (!cfg.r17) return false
+  return (cfg.r18_view || '无人') !== '无人'
 }
 function resolveGame(t) {
   if (!t) return ''
@@ -231,6 +257,11 @@ button{cursor:pointer;background:linear-gradient(135deg,#ff9d54,#ff5d8f);border:
 .lb .lbt{color:#c3c9e0;font-size:13px}
 .empty{color:#8b93b5}
 .tip{color:#7CFFB2;font-size:13px;margin-top:8px;min-height:18px}
+.gtable{width:100%;border-collapse:collapse;margin-top:10px}
+.gtable th,.gtable td{padding:6px 8px;text-align:left;border-bottom:1px solid rgba(255,255,255,.08);font-size:13px}
+.gtable th{color:#9aa3c4;font-weight:600}
+.gtable .gdel{background:#3a2430;color:#ff9aa8;border:1px solid #7a3a4a;padding:4px 10px;font-weight:600}
+.gtable .gdel:hover{background:#5a2f3c}
 </style></head><body>
 <h1>MLY 面板图 · Web 管理</h1>
 <div class="sub">端口 ${WEB_PORT} · 配置实时写入 data/mly-config.json</div>
@@ -251,6 +282,17 @@ button{cursor:pointer;background:linear-gradient(135deg,#ff9d54,#ff5d8f);border:
   <div class="row"><label>R17 开关</label><input type="checkbox" id="r17" ${c.r17 ? 'checked' : ''}/></div>
   <div class="row"><label>R18 开关</label><input type="checkbox" id="r18" ${c.r18 ? 'checked' : ''}/></div>
   <div class="row"><label>拦截原图（面板立绘）</label><input type="checkbox" id="intercept" ${c.intercept ? 'checked' : ''}/></div>
+  <div class="grp" style="margin-top:18px">指定群权限 · 按群覆盖上面的全局设置</div>
+  <div class="row">
+    <select id="gidSel" style="min-width:300px"><option value="">加载群列表…</option></select>
+    <button id="gRefresh">刷新群列表</button>
+  </div>
+  <div class="row">
+    <input type="text" id="gidAdd" placeholder="或手动输入群号" style="width:160px"/>
+    <input type="text" id="gnameAdd" placeholder="备注（可选）" style="width:140px"/>
+    <button id="gAdd">＋ 添加</button>
+  </div>
+  <div id="groupList"></div>
   <div class="row"><button id="save">保存设置</button><span class="tip" id="tip"></span></div>
   <div class="row"><span class="cnt">当前：R=${c.r ? '开' : '关'} · R17=${c.r17 ? '开' : '关'} · R18=${c.r18 ? '开' : '关'} · R18可见=${c.r18_view} · 接管立绘=${c.intercept ? '开' : '关'}</span></div>
 </div>
@@ -292,12 +334,68 @@ button{cursor:pointer;background:linear-gradient(135deg,#ff9d54,#ff5d8f);border:
 <script>
 const REPO=${JSON.stringify(repoJson)};
 const tip=document.getElementById('tip');
+const GROUPS=${JSON.stringify(c.groups || {})};
+const gList=document.getElementById('groupList');
+const GOPT={inherit:'继承全局',allow:'允许',deny:'禁止'};
+function gsel(v){return ['inherit','allow','deny'].map(k=>'<option value="'+k+'"'+((v||'inherit')===k?' selected':'')+'>'+GOPT[k]+'</option>').join('')}
+function renderGroups(){
+  const ids=Object.keys(GROUPS);
+  if(!ids.length){gList.innerHTML='<div class="row"><span class="cnt">暂无指定群 · 所有群使用上面的全局设置</span></div>';return;}
+  gList.innerHTML='<table class="gtable"><thead><tr><th>群号</th><th>备注</th><th>R18</th><th>R17</th><th></th></tr></thead><tbody>'+
+    ids.map(id=>{const g=GROUPS[id]||{};return '<tr data-id="'+esc(id)+'">'+
+      '<td>'+esc(id)+'</td>'+
+      '<td><input type="text" class="gname" style="width:130px" value="'+esc(g.name||'')+'" placeholder="备注"/></td>'+
+      '<td><select class="g_r18">'+gsel(g.r18)+'</select></td>'+
+      '<td><select class="g_r17">'+gsel(g.r17)+'</select></td>'+
+      '<td><button class="gdel" data-id="'+esc(id)+'">删除</button></td></tr>';}).join('')+
+    '</tbody></table>';
+  gList.querySelectorAll('.gdel').forEach(b=>b.onclick=()=>{delete GROUPS[b.dataset.id];renderGroups();});
+}
+renderGroups();
+const GNAMES={};
+async function loadGroups(){
+  const sel=document.getElementById('gidSel');
+  sel.innerHTML='<option value="">加载群列表…</option>';
+  try{
+    const r=await fetch('/groups');
+    const j=await r.json();
+    const list=(j.groups||[]).filter(g=>!GROUPS[g.id]);
+    if(!list.length){sel.innerHTML='<option value="">（无可添加的群 / 均已在列表中）</option>';return;}
+    list.forEach(g=>{GNAMES[g.id]=g.name||''});
+    sel.innerHTML='<option value="">— 选择检测到的群 —</option>'+list.map(g=>'<option value="'+esc(g.id)+'">'+esc((g.name||('群'+g.id))+'（'+g.id+'）')+'</option>').join('');
+  }catch(e){sel.innerHTML='<option value="">加载失败，请手动输入群号</option>';}
+}
+document.getElementById('gRefresh').onclick=loadGroups;
+loadGroups();
+document.getElementById('gAdd').onclick=()=>{
+  const sel=document.getElementById('gidSel');
+  let id=(sel.value||'').trim();
+  const nmInput=(document.getElementById('gnameAdd').value||'').trim();
+  if(!id) id=(document.getElementById('gidAdd').value||'').trim();
+  if(!/^\d{4,20}$/.test(id)){tip.textContent='请选择检测到的群，或手动输入正确群号';return;}
+  const nm=nmInput||GNAMES[id]||'';
+  const prev=GROUPS[id]||{};
+  GROUPS[id]={r18:prev.r18||'inherit',r17:prev.r17||'inherit'};
+  if(nm)GROUPS[id].name=nm;
+  document.getElementById('gidAdd').value='';document.getElementById('gnameAdd').value='';sel.value='';
+  renderGroups(); loadGroups();
+  tip.textContent='已加入列表，请点「保存设置」生效';
+};
 document.getElementById('save').onclick=async()=>{
+  const groups={};
+  gList.querySelectorAll('tr[data-id]').forEach(tr=>{
+    const id=tr.dataset.id;
+    const g={r18:tr.querySelector('.g_r18').value,r17:tr.querySelector('.g_r17').value};
+    const nm=(tr.querySelector('.gname').value||'').trim();
+    if(nm)g.name=nm;
+    groups[id]=g;
+  });
   const cfg={r18_view:document.getElementById('r18_view').value,
     r:document.getElementById('r').checked,
     r17:document.getElementById('r17').checked,
     r18:document.getElementById('r18').checked,
-    intercept:document.getElementById('intercept').checked};
+    intercept:document.getElementById('intercept').checked,
+    groups};
   try{
     const r=await fetch('/set',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(cfg)});
     const j=await r.json();
@@ -526,8 +624,8 @@ async function patchMiaoCostume() {
       ProfileDetail.render = async function (e, char, mode, params) {
         const cfg = loadCfg()
         // 注意：不要用 allowR18 / allowR17 作变量名，会遮蔽同名的模块级函数导致 TDZ 报错
-        const canR18 = cfg.r18 === true && allowR18(cfg, e)
-        const canR17 = cfg.r17 === true && (cfg.r18_view || '无人') !== '无人'
+        const canR18 = allowR18(cfg, e)
+        const canR17 = allowR17(cfg, e)
         return reqStore.run({ allowR18: canR18, allowR17: canR17 }, () => origRender(e, char, mode, params))
       }
       ProfileDetail.__mlyRenderPatched = true
@@ -620,9 +718,49 @@ function startServer() {
         if (typeof d.r17 === 'boolean') c.r17 = d.r17
         if (typeof d.r18 === 'boolean') c.r18 = d.r18
         if (typeof d.intercept === 'boolean') c.intercept = d.intercept
+        if (d.groups && typeof d.groups === 'object' && !Array.isArray(d.groups)) {
+          const out = {}
+          for (const [gid, v] of Object.entries(d.groups)) {
+            const id = String(gid).trim()
+            if (!id || id.length > 32 || !v || typeof v !== 'object') continue
+            const one = {
+              r18: ['inherit', 'allow', 'deny'].includes(v.r18) ? v.r18 : 'inherit',
+              r17: ['inherit', 'allow', 'deny'].includes(v.r17) ? v.r17 : 'inherit',
+            }
+            if (typeof v.name === 'string' && v.name.trim()) one.name = v.name.trim().slice(0, 40)
+            out[id] = one
+          }
+          c.groups = out
+        }
         saveCfg(c)
         res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' })
         res.end(JSON.stringify({ ok: true, cfg: c }))
+        return
+      }
+      if (req.method === 'GET' && p === '/groups') {
+        const map = new Map()
+        try {
+          for (const g of Bot.getGroupArray?.() || []) {
+            const id = String(g.group_id ?? g.id ?? '')
+            if (id) map.set(id, g.group_name || g.name || '')
+          }
+        } catch (e) {}
+        // 缓存为空时，主动向各适配器拉一次群列表
+        if (!map.size) {
+          for (const botId of Bot.uin || []) {
+            const b = Bot.bots?.[botId]
+            if (!b || typeof b.getGroupArray !== 'function') continue
+            try {
+              for (const g of (await b.getGroupArray()) || []) {
+                const id = String(g.group_id ?? g.id ?? '')
+                if (id) map.set(id, g.group_name || g.name || '')
+              }
+            } catch (e) {}
+          }
+        }
+        const list = [...map].map(([id, name]) => ({ id, name })).sort((a, b) => a.id.localeCompare(b.id))
+        res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' })
+        res.end(JSON.stringify({ ok: true, groups: list }))
         return
       }
       if (req.method === 'POST' && p === '/sync/test') {
@@ -800,23 +938,25 @@ class MlyPanel extends plugin {
     const miaoDir = path.join(base, char)
     const repo = path.join(MLY_MBT, game, 'R', 'normal-character', char)
     const files = []
+    const okR17 = allowR17(cfg, e)
+    const okR18 = allowR18(cfg, e)
     // 1) R 级图：优先使用 MBT 仓库（受 cfg.r 开关控制，关掉则不发 R 级图）
     if (cfg.r) for (const f of listImages(repo)) files.push(path.join(repo, f))
-    // 2) R17/R18：MBT 仓库的 R17 / R18 目录（按开关+权限）
+    // 2) R17/R18：MBT 仓库的 R17 / R18 目录（按开关 + 群权限）
     for (const lvl of ['R17', 'R18']) {
-      if (lvl === 'R17' && !cfg.r17) continue
-      if (lvl === 'R18' && !(cfg.r18 && allowR18(cfg, e))) continue
+      if (lvl === 'R17' && !okR17) continue
+      if (lvl === 'R18' && !okR18) continue
       const dir = path.join(MLY_MBT, game, lvl, 'normal-character', char)
       if (!fs.existsSync(dir)) continue
       for (const f of listImages(dir)) files.push(path.join(dir, f))
     }
-    // 3) miao/ZZZ 候选池（文件名含 r17/r18），按开关叠加
+    // 3) miao/ZZZ 候选池（文件名含 r17/r18），按开关 + 群权限叠加
     for (const f of listImages(miaoDir)) {
       const g = gradeOf(f)
       if (g === 'r17') {
-        if (cfg.r17) files.push(path.join(miaoDir, f))
+        if (okR17) files.push(path.join(miaoDir, f))
       } else if (g === 'r18') {
-        if (cfg.r18 && allowR18(cfg, e)) files.push(path.join(miaoDir, f))
+        if (okR18) files.push(path.join(miaoDir, f))
       }
     }
     return files
